@@ -33,7 +33,7 @@ EECR|=(1<<EEPE);
 
 if(flag) sei();
 
-return;
+return true;
 }
 
 bool eeprom_read_byte(const unsigned char address,unsigned char *storage){
@@ -48,5 +48,5 @@ EECR |= (1<<EERE);
 
 storage=EEDR;
 
-return;
+return true;
 }
