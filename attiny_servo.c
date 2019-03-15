@@ -103,8 +103,20 @@ int main(void){
 
 ISR(PCINT0_vect) {
 
-	if (!(PINB & PINB_forward)) interrupted_signal = forward;
-	else if (!(PINB & PINB_reverse)) interrupted_signal = reverse;
+	if (!(PINB & PINB_forward)) {
+    
+    old_signal = forward;
+    
+    if (old_signal != interrupted_signal) interrupted_signal = old_signal;
+    
+  }
+  else if (!(PINB & PINB_reverse)) {
+    
+    old_signal = reverse;
+    
+    if (old_signal != interrupted_signal) interrupted_signal = old_signal;
+  
+  }
 
 }
 
@@ -129,62 +141,51 @@ void sleep(void) {
 } // sleep
 
 void turn_motor(unsigned char _direction) {
-	GIMSK = 0; //disable pinchange interrupt
-	PCMSK = 0; //disable pinchange interrupt on pins;
+  
+  SET_DDRB_OUTPUT(); // pin 0 and 1 output
+  SET_MOTOR_SWITCH_ON(); // turn motor switch HIGH
 
-	SET_DDRB_OUTPUT(); // pin 0 and 1 output
-	SET_MOTOR_SWITCH_ON(); // turn motor switch HIGH
+  /*Start phase correct pwm */
+  TCCR0A = _BV(WGM00) | _BV(COM0B1) | _BV(COM0B0); // mode5 , set on rising clear on falling
+  TCCR0B = _BV(WGM02) | _BV(CS01) | _BV(CS00); //64 prescaler
+  OCR0A = TOP;
 
-	/*Start phase correct pwm */
-	TCCR0A = _BV(WGM00) | _BV(COM0B1) | _BV(COM0B0); // mode5 , set on rising clear on falling
-	TCCR0B = _BV(WGM02) | _BV(CS01) | _BV(CS00); //64 prescaler
-	OCR0A = TOP;
+  OCR0B = eeprom_read_byte((unsigned char *)saved_position);
 
-	OCR0B = eeprom_read_byte((unsigned char *)saved_position);
+  if (OCR0B > closed_position) OCR0B = closed_position;
 
-	if (OCR0B > closed_position) OCR0B = closed_position;
+  if (OCR0B < open_position) OCR0B = open_position;
 
-	if (OCR0B < open_position) OCR0B = open_position;
+  switch (_direction) {
 
-	switch (_direction) {
+    case forward:
 
-		case forward:
+      for (; OCR0B <= closed_position /*&& digitalRead(limiter_button)*/; OCR0B++ ) // goes from 60 degrees to 120 degrees
 
-		for (; OCR0B <= closed_position /*&& digitalRead(limiter_button)*/; OCR0B++ ) // goes from 60 degrees to 120 degrees
+        _delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
 
-		_delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
+      break;
 
-		break;
+    case reverse:
 
-		case reverse:
+      for (; OCR0B >= open_position ; OCR0B--) // goes from 120 degrees to 60 degrees
 
-		for (; OCR0B >= open_position ; OCR0B--) // goes from 120 degrees to 60 degrees
+        _delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
 
-		_delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
+      break;
 
-		break;
+    default:
+      break;
+  }
 
-		default:
-		break;
-	}
+  TCCR0B = 0; //timer/counter stopped
 
-	TCCR0B = 0; //timer/counter stopped
+  SET_MOTOR_SWITCH_OFF(); // turn motor_switch LOW PORTB^=(1<<1);
 
-	SET_MOTOR_SWITCH_OFF(); // turn motor_switch LOW PORTB^=(1<<1);
+  SET_DDRB_INPUT(); // pins 0 and 1 input DDRB^=3;
 
-	SET_DDRB_INPUT(); // pins 0 and 1 input DDRB^=3;
+  eeprom_update_byte((unsigned char *)saved_position, OCR0B);
 
-	interrupted_signal = undefined;
-
-	eeprom_update_byte((unsigned char *)saved_position, OCR0B);
-
-	SET_GIMSK(); // enable pinchange interrupt
-
-	SET_PCMSK(); // enable interrupts on pins
-
-
-
-	return;
+  return;
 
 }
-
