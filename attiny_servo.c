@@ -6,47 +6,34 @@
  */ 
 
 #define F_CPU 1200000UL
-#include <avr/eeprom.h>
 #include <avr/io.h>
 #include <avr/sleep.h>
 #include <avr/interrupt.h>
 #include <util/delay.h>
 
-#define motor_signal 0
+#define motor_signal PB1
 
-#define motor_switch 1
+#define motor_switch PB0
 
-#define limiter_button1 5 //using reset pin as GPIO
+#define limiter_button PB2 // limiter button....do i need it ????
 
-#define limiter_button2 2 // limiter button....do i need it ????
+#define open_signal PB3 // to rotate motor reverse
 
-#define open_signal 3 // to rotate motor forward
-
-#define close_signal 4 // to rotate motor backwards
+#define close_signal PB4 // to rotate motor forward
 
 #define saved_position 1 //eeprom address to save
 
-#define open_position 9
+#define open_position 179
 
-#define closed_position 18
+#define closed_position 169
 
 #define forward 1
 
 #define reverse 2
 
-#define undefined 0
-
-#define PINB_forward 8
-
-#define PINB_reverse 16
-
-#define SET_DDRB_OUTPUT() (DDRB |= _BV(DDB0) | _BV(DDB1))
-
-#define SET_DDRB_INPUT() (DDRB &= ~(_BV(DDB0) | _BV(DDB1)))
-
-#define SET_PORTB() (PORTB |= _BV(DDB2) | _BV(DDB3) | _BV(DDB4) | _BV(DDB5))
-
 #define SET_GIMSK() (GIMSK |= _BV(PCIE))
+
+#define SET_GIMSK_OFF() (GIMSK&=~_BV(PCIE))
 
 #define SET_PCMSK() (PCMSK |= _BV(PCINT3) | _BV(PCINT4))
 
@@ -56,7 +43,7 @@
 
 #define SET_MOTOR_SWITCH_ON() (PORTB |= _BV(motor_switch))
 
-#define time_limit 16 //300ms / 19ms(OVF)
+//#define time_limit 16 //300ms / 19ms(OVF)
 
 #define TOP 188 //top value for counter
 
@@ -66,17 +53,23 @@ void sleep(void);
 
 volatile unsigned char interrupted_signal;
 
+volatile unsigned char current_state;
+
 int main(void){
 
- SET_PORTB(); // pins 2,3,4,5 input pullup enable
+ DDRB |= _BV(motor_switch) | _BV(motor_signal);//set OUTPUT pins
 
- SET_GIMSK(); //pin change interrupt enable
+  PORTB |= ~(_BV(motor_switch) | _BV(motor_signal));// output low
 
- SET_PCMSK(); // pin change on pins 3 and 4 active
+  PORTB |= _BV(limiter_button) | _BV(open_signal) | _BV(close_signal);// set pullups
 
- ADC_OFF(); // switch off ADC
+  SET_GIMSK(); //pin change interrupt enable
 
- sleep();
+  SET_PCMSK(); // pin change on pins 3 and 4 active
+
+  ADC_OFF(); // switch off ADC
+
+  sleep();
 
 
 
@@ -85,106 +78,98 @@ int main(void){
 
 		switch (interrupted_signal) {
 
-			case (forward):
-			turn_motor(forward);
-			break;
+    case (forward):
+      turn_motor(forward);
+      current_state = forward;
+      break;
 
-			case (reverse):
-			turn_motor(reverse);
-			break;
+    case (reverse):
+      turn_motor(reverse);
+      current_state = reverse;
+      break;
 
-			default:
-			sleep();
-			break;
+    default:
+      break;
 
-		}
-	}
+  }
+
+  sleep();
 }
 
 ISR(PCINT0_vect) {
 
-	if (!(PINB & PINB_forward)) {
-    
-    old_signal = forward;
-    
-    if (old_signal != interrupted_signal) interrupted_signal = old_signal;
-    
-  }
-  else if (!(PINB & PINB_reverse)) {
-    
-    old_signal = reverse;
-    
-    if (old_signal != interrupted_signal) interrupted_signal = old_signal;
-  
-  }
+	if (bit_is_clear(PINB, close_signal) && current_state != forward) interrupted_signal = forward;
+
+  else if (bit_is_clear(PINB, open_signal) && current_state != reverse) interrupted_signal = reverse;
+
+  else interrupted_signal = 0;
 
 }
 
 //sleep mode
 void sleep(void) {
 
-	set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+	void sleep(void) {
 
-	sleep_enable();                         // Sets the Sleep Enable bit in the MCUCR Register (SE BIT)
+  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
 
-	//sleep_bod_disable(); ///disiabbled through fuses
+  cli();
 
-	sei();                                  // Enable interrupts
+  sleep_enable();                         // Sets the Sleep Enable bit in the MCUCR Register (SE BIT)
 
-	sleep_cpu();                            // sleep
+  //sleep_bod_disable(); ///disiabbled through fuses
 
-	cli();                                  // Disable interrupts
+  sei();                                  // Enable interrupts
 
-	sleep_disable();                        // Clear SE bit
+  sleep_cpu();                            // sleep                                 // Disable interrupts
 
-	sei();                                  // Enable interrupts
+  sleep_disable();                        // Clear SE bit
+
+  sei();                                  // Enable interrupts
 } // sleep
-
-void turn_motor(unsigned char _direction) {
   
-  SET_DDRB_OUTPUT(); // pin 0 and 1 output
+ void turn_motor(unsigned char _direction) {
+
+  SET_GIMSK_OFF();
+
   SET_MOTOR_SWITCH_ON(); // turn motor switch HIGH
 
   /*Start phase correct pwm */
-  TCCR0A = _BV(WGM00) | _BV(COM0B1) | _BV(COM0B0); // mode5 , set on rising clear on falling
+  TCCR0A = _BV(WGM00) | _BV(COM0B1) | _BV(COM0B0);// mode5 , set on rising clear on falling//transfer to setup
+
   TCCR0B = _BV(WGM02) | _BV(CS01) | _BV(CS00); //64 prescaler
+
   OCR0A = TOP;
 
-  OCR0B = eeprom_read_byte((unsigned char *)saved_position);
-
-  if (OCR0B > closed_position) OCR0B = closed_position;
-
-  if (OCR0B < open_position) OCR0B = open_position;
 
   switch (_direction) {
 
     case forward:
 
-      for (; OCR0B <= closed_position /*&& digitalRead(limiter_button)*/; OCR0B++ ) // goes from 60 degrees to 120 degrees
-
-        _delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
-
+      for (unsigned char i = 0; i <= 10 && bit_is_set(PINB,limiter_button); i++) {
+        OCR0B = closed_position;
+        _delay_ms(15);
+      }
       break;
 
     case reverse:
-
-      for (; OCR0B >= open_position ; OCR0B--) // goes from 120 degrees to 60 degrees
-
-        _delay_ms(15);                              // waits 15 milliseconds for the servo to reach the position
-
+      for (unsigned char i = 0; i <= 10; i++) {
+        OCR0B = open_position;
+        _delay_ms(15);  // goes from 120 degrees to 60 degrees
+      }
       break;
 
     default:
       break;
   }
 
-  TCCR0B = 0; //timer/counter stopped
-
   SET_MOTOR_SWITCH_OFF(); // turn motor_switch LOW PORTB^=(1<<1);
 
-  SET_DDRB_INPUT(); // pins 0 and 1 input DDRB^=3;
+  TCCR0B = 0; //timer/counter stopped
 
-  eeprom_update_byte((unsigned char *)saved_position, OCR0B);
+  TCCR0A = 0;
+
+  SET_GIMSK();// enable pinchange global interrupt
 
   return;
 
